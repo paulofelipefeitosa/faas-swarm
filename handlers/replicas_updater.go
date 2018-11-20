@@ -3,10 +3,12 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/client"
@@ -50,7 +52,7 @@ func ReplicaUpdater(c *client.Client) http.HandlerFunc {
 
 		log.Printf("Scaling %s to %d replicas", functionName, req.Replicas)
 
-		scaleErr := scaleService(functionName, req.Replicas, serviceQuery)
+		postStartTs, postEndTs, scaleErr := scaleService(functionName, req.Replicas, serviceQuery)
 		if scaleErr != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(scaleErr.Error()))
@@ -59,20 +61,26 @@ func ReplicaUpdater(c *client.Client) http.HandlerFunc {
 		}
 
 		w.WriteHeader(http.StatusAccepted)
+		w.Header().Add("X-Scale-Post-Send-Time", fmt.Sprintf("%d", postStartTs.UTC().UnixNano()))
+		w.Header().Add("X-Scale-Post-Response-Time", fmt.Sprintf("%d", postEndTs.UTC().UnixNano()))
 	}
 }
 
-func scaleService(serviceName string, newReplicas uint64, service ServiceQuery) error {
+func scaleService(serviceName string, newReplicas uint64, service ServiceQuery) (time.Time, time.Time, error) {
+	var postStartTs time.Time
+	var postEndTs time.Time
 	var err error
 
 	if len(serviceName) > 0 {
-		updateErr := service.SetReplicas(serviceName, newReplicas)
+		startTs, endTs, updateErr := service.SetReplicas(serviceName, newReplicas)
 		if updateErr != nil {
 			err = updateErr
 		}
+		postStartTs = startTs
+		postEndTs = endTs
 	}
 
-	return err
+	return postStartTs, postEndTs, err
 }
 
 // DefaultMaxReplicas is the amount of replicas a service will auto-scale up to.
@@ -87,7 +95,7 @@ const MaxScaleLabel = "com.openfaas.scale.max"
 // ServiceQuery provides interface for replica querying/setting
 type ServiceQuery interface {
 	GetReplicas(service string) (currentReplicas uint64, maxReplicas uint64, minReplicas uint64, err error)
-	SetReplicas(service string, count uint64) error
+	SetReplicas(service string, count uint64) (postStartTs time.Time, postEndTs time.Time, err error)
 }
 
 // NewSwarmServiceQuery create new Docker Swarm implementation
@@ -145,10 +153,13 @@ func (s SwarmServiceQuery) GetReplicas(serviceName string) (uint64, uint64, uint
 }
 
 // SetReplicas update the replica count
-func (s SwarmServiceQuery) SetReplicas(serviceName string, count uint64) error {
+func (s SwarmServiceQuery) SetReplicas(serviceName string, count uint64) (time.Time, time.Time, error) {
 	opts := types.ServiceInspectOptions{
 		InsertDefaults: true,
 	}
+
+	var postStartTs time.Time
+	var postEndTs time.Time
 
 	service, _, err := s.c.ServiceInspectWithRaw(context.Background(), serviceName, opts)
 	if err == nil {
@@ -157,11 +168,13 @@ func (s SwarmServiceQuery) SetReplicas(serviceName string, count uint64) error {
 		updateOpts := types.ServiceUpdateOptions{}
 		updateOpts.RegistryAuthFrom = types.RegistryAuthFromSpec
 
+		postStartTs = time.Now()
 		_, updateErr := s.c.ServiceUpdate(context.Background(), service.ID, service.Version, service.Spec, updateOpts)
+		postEndTs = time.Now()
 		if updateErr != nil {
 			err = updateErr
 		}
 	}
 
-	return err
+	return postStartTs, postEndTs, err
 }
