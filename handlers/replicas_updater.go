@@ -53,6 +53,11 @@ func ReplicaUpdater(c *client.Client) http.HandlerFunc {
 		log.Printf("Scaling %s to %d replicas", functionName, req.Replicas)
 
 		postStartTs, postEndTs, scaleErr := scaleService(functionName, req.Replicas, serviceQuery)
+
+		log.Printf(fmt.Sprintf("Adding Headers in response: %d %d", postStartTs.UTC().UnixNano(), postEndTs.UTC().UnixNano()))
+		w.Header().Add("X-Scale-Post-Send-Time", fmt.Sprintf("%d", postStartTs.UTC().UnixNano()))
+		w.Header().Add("X-Scale-Post-Response-Time", fmt.Sprintf("%d", postEndTs.UTC().UnixNano()))
+		
 		if scaleErr != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(scaleErr.Error()))
@@ -61,9 +66,6 @@ func ReplicaUpdater(c *client.Client) http.HandlerFunc {
 		}
 
 		w.WriteHeader(http.StatusAccepted)
-		log.Printf(fmt.Sprintf("Adding Headers in response: %d %d", postStartTs.UTC().UnixNano(), postEndTs.UTC().UnixNano()))
-		w.Header().Add("X-Scale-Post-Send-Time", fmt.Sprintf("%d", postStartTs.UTC().UnixNano()))
-		w.Header().Add("X-Scale-Post-Response-Time", fmt.Sprintf("%d", postEndTs.UTC().UnixNano()))
 	}
 }
 
